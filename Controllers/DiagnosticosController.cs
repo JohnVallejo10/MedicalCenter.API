@@ -1,11 +1,9 @@
-﻿// Archivo: Controllers/DiagnosticosController.cs
-
-using MedicalCenter.API.Data;
+﻿using MedicalCenter.API.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims; // <-- ¡¡IMPORTANTE!!
-using System.Collections.Generic; // <-- Para new List<>()
+using System.Security.Claims;
+using System.Collections.Generic;
 
 namespace MedicalCenter.API.Controllers
 {
@@ -14,7 +12,6 @@ namespace MedicalCenter.API.Controllers
     [ApiController]
     public class DiagnosticosController : ControllerBase
     {
-        // CAMBIO: Inyectar la FÁBRICA
         private readonly ILocalDbContextFactory _localContextFactory;
 
         public DiagnosticosController(ILocalDbContextFactory localContextFactory)
@@ -22,46 +19,28 @@ namespace MedicalCenter.API.Controllers
             _localContextFactory = localContextFactory;
         }
 
-        // --- INICIO DE HELPERS CORREGIDOS ---
-
-        // Helper para OBTENER el ID del centro desde el token
         private int? GetCentroIdFromToken()
         {
             var centroIdClaim = User.FindFirst("centro_medico_id");
             if (centroIdClaim == null || !int.TryParse(centroIdClaim.Value, out var centroId))
-            {
                 return null;
-            }
             return centroId;
         }
 
-        // Helper para CREAR el contexto basado en un ID
         private LocalDbContext GetContextFromToken(int centroId)
         {
             return _localContextFactory.CreateDbContext(centroId);
         }
-        // --- FIN DE HELPERS CORREGIDOS ---
-
 
         // GET: api/Diagnosticos
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Diagnostico>>> GetDiagnosticos()
         {
             var centroId = GetCentroIdFromToken();
+            if (!centroId.HasValue) return Unauthorized();
 
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            // --- ¡SOLUCIÓN! ---
-            // Si el usuario es Admin Global (ID 1), devolver lista vacía.
-            if (centroId.Value == 1)
-            {
-                return Ok(new List<Diagnostico>());
-            }
-            // --- Fin de la solución ---
-
+            // CORRECCIÓN: Eliminamos el bloqueo al ID 1. 
+            // Ahora Carolina podrá ver la lista si tiene diagnósticos.
             using (var _context = GetContextFromToken(centroId.Value))
             {
                 return await _context.Diagnosticos.ToListAsync();
@@ -69,33 +48,18 @@ namespace MedicalCenter.API.Controllers
         }
 
         // GET: api/Diagnosticos/PorConsulta/5
-        // Endpoint útil para tu frontend
         [HttpGet("PorConsulta/{consultaId}")]
         public async Task<ActionResult<IEnumerable<Diagnostico>>> GetDiagnosticosPorConsulta(int consultaId)
         {
             var centroId = GetCentroIdFromToken();
+            if (!centroId.HasValue) return Unauthorized();
 
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            // --- ¡SOLUCIÓN! ---
-            // Si el usuario es Admin Global (ID 1), devolver lista vacía.
-            if (centroId.Value == 1)
-            {
-                return Ok(new List<Diagnostico>());
-            }
-            // --- Fin de la solución ---
-
+            // CORRECCIÓN: Eliminamos el bloqueo al ID 1.
             using (var _context = GetContextFromToken(centroId.Value))
             {
-                // Validar que la consulta pertenezca a este centro
                 var consultaExiste = await _context.ConsultasMedicas.AnyAsync(c => c.Id == consultaId);
                 if (!consultaExiste)
-                {
                     return NotFound("La consulta no existe en este centro médico.");
-                }
 
                 return await _context.Diagnosticos
                     .Where(d => d.ConsultaId == consultaId)
@@ -108,28 +72,12 @@ namespace MedicalCenter.API.Controllers
         public async Task<ActionResult<Diagnostico>> GetDiagnostico(int id)
         {
             var centroId = GetCentroIdFromToken();
-
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            // --- ¡SOLUCIÓN! ---
-            if (centroId.Value == 1)
-            {
-                return NotFound();
-            }
-            // --- Fin de la solución ---
+            if (!centroId.HasValue) return Unauthorized();
 
             using (var _context = GetContextFromToken(centroId.Value))
             {
                 var diagnostico = await _context.Diagnosticos.FindAsync(id);
-
-                if (diagnostico == null)
-                {
-                    return NotFound();
-                }
-
+                if (diagnostico == null) return NotFound();
                 return diagnostico;
             }
         }
@@ -138,32 +86,17 @@ namespace MedicalCenter.API.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> PutDiagnostico(int id, Diagnostico diagnostico)
         {
-            if (id != diagnostico.Id)
-            {
-                return BadRequest();
-            }
+            if (id != diagnostico.Id) return BadRequest();
 
             var centroId = GetCentroIdFromToken();
+            if (!centroId.HasValue) return Unauthorized();
 
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            // --- ¡SOLUCIÓN! ---
-            if (centroId.Value == 1)
-            {
-                return Forbid("El administrador global no puede modificar diagnósticos.");
-            }
-            // --- Fin de la solución ---
+            // CORRECCIÓN: Se eliminó el "return Forbid(...)" que causaba el error 500
 
             using (var _context = GetContextFromToken(centroId.Value))
             {
                 var existe = await _context.Diagnosticos.AnyAsync(e => e.Id == id);
-                if (!existe)
-                {
-                    return NotFound();
-                }
+                if (!existe) return NotFound();
 
                 _context.Entry(diagnostico).State = EntityState.Modified;
                 await _context.SaveChangesAsync();
@@ -176,29 +109,17 @@ namespace MedicalCenter.API.Controllers
         public async Task<ActionResult<Diagnostico>> PostDiagnostico(Diagnostico diagnostico)
         {
             var centroId = GetCentroIdFromToken();
+            if (!centroId.HasValue) return Unauthorized();
 
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            // --- ¡SOLUCIÓN! ---
-            if (centroId.Value == 1)
-            {
-                return Forbid("El administrador global no puede crear diagnósticos.");
-            }
-            // --- Fin de la solución ---
+            // CORRECCIÓN: Eliminado el bloqueo y el error de sintaxis Forbid()
+            // Ahora Carolina (Centro 1) puede guardar diagnósticos.
 
             using (var _context = GetContextFromToken(centroId.Value))
             {
-                // 1. Validar que la Consulta exista EN ESTE CONTEXTO LOCAL
                 var consultaExiste = await _context.ConsultasMedicas.AnyAsync(c => c.Id == diagnostico.ConsultaId);
                 if (!consultaExiste)
-                {
                     return BadRequest(new { message = "El ConsultaId no existe en este centro médico." });
-                }
 
-                // 2. Guardar el diagnóstico
                 _context.Diagnosticos.Add(diagnostico);
                 await _context.SaveChangesAsync();
 
@@ -211,36 +132,23 @@ namespace MedicalCenter.API.Controllers
         public async Task<IActionResult> DeleteDiagnostico(int id)
         {
             var centroId = GetCentroIdFromToken();
+            if (!centroId.HasValue) return Unauthorized();
 
-            if (!centroId.HasValue)
-            {
-                return Unauthorized("Token de usuario no contiene un 'centro_medico_id' válido.");
-            }
-
-            if (centroId.Value == 1)
-            {
-                return Forbid("El administrador global no puede eliminar diagnósticos.");
-            }
+            // CORRECCIÓN: Eliminado el bloqueo al admin global/médico local
 
             using (var _context = GetContextFromToken(centroId.Value))
             {
-                // 1. Buscamos el diagnóstico INCLUYENDO sus prescripciones (Importante)
                 var diagnostico = await _context.Diagnosticos
-                    .Include(d => d.Prescripciones) // <--- Esto carga los hijos
+                    .Include(d => d.Prescripciones)
                     .FirstOrDefaultAsync(d => d.Id == id);
 
-                if (diagnostico == null)
-                {
-                    return NotFound();
-                }
+                if (diagnostico == null) return NotFound();
 
-                // 2. Eliminamos explícitamente las prescripciones hijas primero
                 if (diagnostico.Prescripciones != null && diagnostico.Prescripciones.Any())
                 {
                     _context.Prescripciones.RemoveRange(diagnostico.Prescripciones);
                 }
 
-                // 3. Ahora sí eliminamos el padre (Diagnóstico) sin violar la FK
                 _context.Diagnosticos.Remove(diagnostico);
                 await _context.SaveChangesAsync();
 

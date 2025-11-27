@@ -48,21 +48,21 @@ namespace MedicalCenter.API.Controllers
             var centroId = GetCentroIdFromToken();
             if (!centroId.HasValue) return Unauthorized("Token inválido: falta centro_medico_id.");
 
-            // --- CAMBIO PRINCIPAL AQUÍ ---
+            // Detectamos si el usuario es médico para diferenciar la lógica
+            bool esMedico = User.IsInRole("MEDICO");
 
-            // CASO 1: Si es el ADMIN CENTRAL (Quito/Global - ID 1)
-            // Debe conectarse a Guayaquil (2) y Cuenca (3) para traer todo.
-            if (centroId.Value == 1)
+            // CASO 1: Si es el ADMIN CENTRAL (ID 1) Y NO ES MÉDICO
+            // Solo el administrativo global quiere ver el reporte unificado de todas las sedes.
+            if (centroId.Value == 1 && !esMedico)
             {
                 var listaUnificada = new List<ConsultaMedica>();
-                // IDs de tus nodos esclavos definidos en el Factory
+                // IDs de tus nodos esclavos (Guayaquil y Cuenca)
                 int[] nodosEsclavos = { 2, 3 };
 
                 foreach (var nodoId in nodosEsclavos)
                 {
                     try
                     {
-                        // Usamos la fábrica para crear una conexión temporal a cada nodo
                         using (var context = _localContextFactory.CreateDbContext(nodoId))
                         {
                             var consultasNodo = await context.ConsultasMedicas.ToListAsync();
@@ -71,19 +71,18 @@ namespace MedicalCenter.API.Controllers
                     }
                     catch (Exception)
                     {
-                        // Si un nodo está apagado (ej. Cuenca caído), capturamos el error
-                        // para que no falle toda la petición y al menos muestre los otros.
-                        // Aquí podrías loguear el error si quisieras.
+                        // Si un nodo falla, continuamos con los demás
                         continue;
                     }
                 }
 
-                // Retornamos la lista combinada y ordenada por fecha
+                // Retornamos la lista combinada
                 return Ok(listaUnificada.OrderByDescending(c => c.FechaHora));
             }
 
-            // CASO 2: Si es un MÉDICO o ADMIN LOCAL (Guayaquil o Cuenca)
-            // Solo devuelve sus propios datos (comportamiento original).
+            // CASO 2: LÓGICA LOCAL (Médicos de cualquier centro O Admins Locales)
+            // - Si es Médico del Centro 1: Cae aquí y ve la DB del Centro 1.
+            // - Si es Médico del Centro 2: Cae aquí y ve la DB del Centro 2.
             using (var context = GetContextFromToken(centroId.Value))
             {
                 return await context.ConsultasMedicas
@@ -119,10 +118,12 @@ namespace MedicalCenter.API.Controllers
         {
             var centroId = GetCentroIdFromToken();
             if (!centroId.HasValue) return Unauthorized();
-            if (centroId.Value == 1)
-                return Forbid("El administrador global no puede crear consultas médicas locales.");
+
+            // --- BLOQUE ELIMINADO: Ya no restringimos al ID 1 ---
+            // El médico del centro 1 (Global) AHORA SÍ puede guardar en su base local.
 
             // 1. VALIDACIÓN MANUAL EN GLOBAL
+            // Verificamos que el paciente y médico existan en la base maestra antes de guardar
             var pacienteExiste = await _globalContext.Pacientes.AnyAsync(p => p.Id == consultaDto.PacienteId);
             if (!pacienteExiste)
                 return BadRequest($"El Paciente con ID {consultaDto.PacienteId} no existe en la base global.");
@@ -132,14 +133,14 @@ namespace MedicalCenter.API.Controllers
                 return BadRequest($"El Médico con ID {consultaDto.MedicoId} no existe en la base global.");
 
             // 2. GUARDADO EN LOCAL
+            // GetContextFromToken(1) devolverá el contexto conectado a la DB local de Quito/Global
             using (var context = GetContextFromToken(centroId.Value))
             {
-                // ✨ SOLUCIÓN: Usa el namespace completo o asegúrate de usar el correcto
                 var nuevaConsulta = new MedicalCenter.API.Models.Entities.ConsultaMedica
                 {
                     PacienteId = consultaDto.PacienteId,
                     MedicoId = consultaDto.MedicoId,
-                    Motivo = consultaDto.Motivo ?? string.Empty, 
+                    Motivo = consultaDto.Motivo ?? string.Empty,
                     FechaHora = consultaDto.FechaHora ?? DateTime.Now
                 };
 
@@ -192,9 +193,6 @@ namespace MedicalCenter.API.Controllers
         {
             var centroId = GetCentroIdFromToken();
             if (!centroId.HasValue) return Unauthorized();
-
-            // Nota: Si quisieras que solo el médico dueño pueda borrarla, aquí añadirías esa validación extra.
-            if (centroId.Value == 1) return Forbid();
 
             using (var context = GetContextFromToken(centroId.Value))
             {
